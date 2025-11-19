@@ -266,7 +266,7 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 		return fmt.Errorf("dnw: only wrote %d/%d bytes", wrote, len(p))
 	}
 
-	time.Sleep(1)
+	time.Sleep(2 * time.Second) //Allow some time for the device to process the written data
 	return nil
 }
 func (dnw *DNW) Write(p []byte) (int, error) {
@@ -281,9 +281,11 @@ func (dnw *DNW) Write(p []byte) (int, error) {
 func (dnw *DNW) write(p []byte) (int, error) {
 	n, err := dnw.port.Write(p)
 	if err != nil {
+		fmt.Errorf("dnw: write error: %v", err)
 		return n, err
 	}
 	if err := dnw.port.Drain(); err != nil {
+		fmt.Errorf("dnw: Drain error: %v", err)
 		return n, err
 	}
 	return n, nil

@@ -225,7 +225,7 @@ func main() {
 	var img []byte
 	var err error
 
-	img = make([]byte, 12288)
+	img = make([]byte, 4*1024)//4k, 12k 12288
 	if dpm != "" {
 		img, err = readFile(dpm)
 		if err != nil {
@@ -351,8 +351,10 @@ func main() {
 				break
 			}
 			if msg == nil {
+				log.Traceln(" ------ msg == nil .......")
 				continue
 			}
+			log.Traceln(" ------ msg :", msg, "!!!")
 
 			switch msg.Command() {
 			case "C":
@@ -446,7 +448,7 @@ func main() {
 				switch msg.SubCommand() {
 				case "req":
 					if request == bootloader {
-						log.Traceln("Received duplicate bootloader request")
+						log.Traceln("Received duplicate bootloader request: " + request)
 						continue
 					}
 					log.Infoln("Requested", bootloader)
@@ -495,6 +497,7 @@ func main() {
 
 			if err != nil {
 				log.Errorf("Internal error: %v", err)
+				break
 			}
 		}
 
