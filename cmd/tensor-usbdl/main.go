@@ -448,7 +448,7 @@ func main() {
 				switch msg.SubCommand() {
 				case "req":
 					if request == bootloader {
-						log.Traceln("Received duplicate bootloader request: " + request)
+						log.Traceln("Received duplicate request: " + request)
 						continue
 					}
 					log.Infoln("Requested", bootloader)
@@ -458,7 +458,7 @@ func main() {
 					log.Debugln("Acknowledged", bootloader)
 					upload = true
 				case "nak":
-					log.Errorln("Refused", bootloader)
+					err = fmt.Errorf("Refused", bootloader)
 				default:
 					err = fmt.Errorf("unknown EUB message: %s", msg)
 				}
