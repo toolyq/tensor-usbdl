@@ -249,15 +249,38 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 		}*/
 
 		//Keep leftover bytes within msg bounds
-		if wrote+left >= len(p) {
-			left -= (wrote + left) - len(p)
+		chunkEnd := wrote + left
+		if chunkEnd > len(p) {
+			chunkEnd = len(p)
+		}
+		chunk := p[wrote:chunkEnd]
+
+		var n int
+		var err error
+		for i := 0; i < 4; i++ { // 1 initial try + 3 retries
+			n, err = dnw.write(chunk)
+			if err == nil {
+				break // success
+			}else {
+				fmt.Printf("dnw: write error (attempt %d): %v\n", i+1, err)
+			}
+			// If port is closed, no point in retrying
+			if dnw.Closed() {
+				fmt.Printf("dnw: port closed (attempt %d): %v\n", i+1, err)
+				break
+			}
+			if i < 3 {
+				time.Sleep(time.Duration(i+1) * time.Second)
+			}
 		}
 
-		n, err := dnw.write(p[wrote : wrote+left])
-		wrote += n
 		if err != nil {
+			wrote += n // Add bytes from the last failed attempt for accurate error reporting
 			return fmt.Errorf("dnw: failed to write after %d/%d bytes: %v", wrote, len(p), err)
 		}
+
+		wrote += len(chunk) // On success, advance by the full chunk size
+
 		if wrote >= len(p) {
 			break
 		}
