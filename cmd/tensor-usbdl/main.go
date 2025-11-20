@@ -351,7 +351,7 @@ func main() {
 				break
 			}
 			if msg == nil {
-				log.Traceln(" ------ msg == nil .......")
+				//log.Traceln(" ------ msg == nil .......")
 				continue
 			}
 			log.Traceln(" ------ msg :", msg, "!!!")
@@ -377,7 +377,10 @@ func main() {
 					op = 0
 				case "EPBL":
 					bl = bootloaders["PBL"]
-					op = 0
+					op = 1
+				case "EPBB":
+					bl = bootloaders["PBL"]
+					op = 2
 				case "BL2":
 					bl = bootloaders["BL2"]
 					op = 1
@@ -497,7 +500,7 @@ func main() {
 
 			if err != nil {
 				log.Errorf("Internal error: %v", err)
-				break
+				// break
 			}
 		}
 

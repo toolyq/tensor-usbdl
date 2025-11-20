@@ -217,7 +217,7 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 	r.Seek(0, io.SeekEnd) //Seek to the end of the buffer to only process new responses after writing each block*/
 
 	//Write on loop until the end of message or error
-	blockSize := 10240
+	blockSize := 512 //10240
 	left := blockSize
 	wrote := 0
 	for {
@@ -258,8 +258,16 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 		var n int
 		var err error
 		for i := 0; i < 4; i++ { // 1 initial try + 3 retries
+			// If port is closed, no point in retrying
+			if dnw.Closed() {
+				fmt.Printf("dnw: port closed (attempt %d): %v\n", i+1, err)
+				break
+			}
+			// time.Sleep(time.Duration(5) * time.Second)
+			fmt.Printf("dnw: writing %d bytes (attempt %d)\n", len(chunk), i+1)
 			n, err = dnw.write(chunk)
 			if err == nil {
+				fmt.Printf("dnw: successfully wrote %d bytes\n", n)
 				break // success
 			}else {
 				fmt.Printf("dnw: write error (attempt %d): %v\n", i+1, err)
@@ -268,9 +276,6 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 			if dnw.Closed() {
 				fmt.Printf("dnw: port closed (attempt %d): %v\n", i+1, err)
 				break
-			}
-			if i < 3 {
-				time.Sleep(time.Duration(i+1) * time.Second)
 			}
 		}
 
@@ -289,7 +294,7 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 		return fmt.Errorf("dnw: only wrote %d/%d bytes", wrote, len(p))
 	}
 
-	time.Sleep(2 * time.Second) //Allow some time for the device to process the written data
+	time.Sleep(time.Duration(1) * time.Second) //Allow some time for the device to process the written data
 	return nil
 }
 func (dnw *DNW) Write(p []byte) (int, error) {
