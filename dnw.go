@@ -1,6 +1,7 @@
 package tensorutils
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sync"
@@ -211,86 +212,45 @@ func (dnw *DNW) WriteMsg(msg *Message) error {
 	}
 
 	p := msg.Bytes()
+	totalSize := len(p)
 
-	/*r := dnw.buffer.Reference()
-	defer r.Close()
-	r.Seek(0, io.SeekEnd) //Seek to the end of the buffer to only process new responses after writing each block*/
+	fmt.Printf("dnw: writing complete message (%d bytes) in one operation\n", totalSize)
+	fmt.Printf("dnw: message header (first 32 bytes): %X\n", p[:min(32, len(p))])
+	fmt.Printf("dnw: message trailer (last 16 bytes): %X\n", p[max(0, len(p)-16):])
 
-	//Write on loop until the end of message or error
-	blockSize := 10240
-	left := blockSize
-	wrote := 0
-	for {
-		if dnw.Closed() {
-			return fmt.Errorf("dnw: closed but only wrote %d/%d bytes", wrote, len(p))
-		}
-
-		/*msg, err := dnw.readMsg(r)
-		if err != nil {
-			return fmt.Errorf("dnw: failed to read message after writing %d/%d bytes: %v", wrote, len(p), err)
-		}
-		if msg != nil {
-			switch msg.Command() {
-			case "C":
-				return fmt.Errorf("dnw: %s control received after writing %d/%d bytes", msg.Command(), wrote, len(p))
-			case "\x00":
-				return fmt.Errorf("dnw: 0x%0X control received after writing %d/%d bytes", msg.Command(), wrote, len(p))
-			case "eub":
-				switch msg.SubCommand() {
-				case "req":
-					return fmt.Errorf("dnw: new request received after writing %d/%d bytes", wrote, len(p))
-				case "ack":
-					return fmt.Errorf("dnw: ack received after writing %d/%d bytes", wrote, len(p))
-				case "nak":
-					return fmt.Errorf("dnw: nak received after writing %d/%d bytes", wrote, len(p))
-				}
-			}
-			fmt.Printf("dnw: received message after writing %d/%d bytes: %s\n", wrote, len(p), msg.String())
-		}*/
-
-		//Keep leftover bytes within msg bounds
-		chunkEnd := wrote + left
-		if chunkEnd > len(p) {
-			chunkEnd = len(p)
-		}
-		chunk := p[wrote:chunkEnd]
-
-		var n int
-		var err error
-		for i := 0; i < 4; i++ { // 1 initial try + 3 retries
-			n, err = dnw.write(chunk)
-			if err == nil {
-				break // success
-			}else {
-				fmt.Printf("dnw: write error (attempt %d): %v\n", i+1, err)
-			}
-			// If port is closed, no point in retrying
-			if dnw.Closed() {
-				fmt.Printf("dnw: port closed (attempt %d): %v\n", i+1, err)
-				break
-			}
-			if i < 3 {
-				time.Sleep(time.Duration(i+1) * time.Second)
-			}
-		}
-
-		if err != nil {
-			wrote += n // Add bytes from the last failed attempt for accurate error reporting
-			return fmt.Errorf("dnw: failed to write after %d/%d bytes: %v", wrote, len(p), err)
-		}
-
-		wrote += len(chunk) // On success, advance by the full chunk size
-
-		if wrote >= len(p) {
-			break
-		}
-	}
-	if wrote != len(p) {
-		return fmt.Errorf("dnw: only wrote %d/%d bytes", wrote, len(p))
+	// Check for large messages that might need special handling
+	if totalSize > 20480 { // 20KB threshold
+		fmt.Printf("dnw: WARNING - Large message detected (%d bytes)\n", totalSize)
+		fmt.Printf("dnw: Device may have buffer limitations. Consider splitting at protocol level.\n")
 	}
 
-	time.Sleep(2 * time.Second) //Allow some time for the device to process the written data
+	// Write entire message at once - the protocol requires the complete packet
+	// The serial driver will handle flow control internally
+	n, err := dnw.writeChunked(p)
+	if err != nil {
+		return fmt.Errorf("dnw: failed to write message: %v", err)
+	}
+	if n != totalSize {
+		return fmt.Errorf("dnw: only wrote %d/%d bytes", n, totalSize)
+	}
+
+	fmt.Printf("dnw: completed writing %d bytes\n", n)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 func (dnw *DNW) Write(p []byte) (int, error) {
 	dnw.mutex.Lock()
@@ -304,14 +264,80 @@ func (dnw *DNW) Write(p []byte) (int, error) {
 func (dnw *DNW) write(p []byte) (int, error) {
 	n, err := dnw.port.Write(p)
 	if err != nil {
-		fmt.Errorf("dnw: write error: %v", err)
-		return n, err
+		return n, fmt.Errorf("dnw: write error: %v", err)
 	}
+	
+	// Critical: Wait for the serial port to actually transmit all data
+	// This ensures the device's hardware buffer can handle the next chunk
 	if err := dnw.port.Drain(); err != nil {
-		fmt.Errorf("dnw: Drain error: %v", err)
-		return n, err
+		return n, fmt.Errorf("dnw: Drain error: %v", err)
 	}
+	
+	// Additional delay to allow device's RX buffer to process
+	// Increased to 50ms for maximum reliability with large transfers
+	time.Sleep(time.Duration(50) * time.Millisecond)
+	
 	return n, nil
+}
+
+// writeChunked writes data in small chunks with delays between them
+// This avoids overwhelming the device's receive buffer while maintaining protocol integrity
+func (dnw *DNW) writeChunked(p []byte) (int, error) {
+	totalSize := len(p)
+	chunkSize := 256 // Reduced to 256 for testing
+	wrote := 0
+	chunkNum := 0
+
+	for wrote < totalSize {
+		end := wrote + chunkSize
+		if end > totalSize {
+			end = totalSize
+		}
+		chunk := p[wrote:end]
+		chunkNum++
+
+		// Write chunk directly to port
+		fmt.Printf("dnw: writing chunk #%d (%d bytes at offset %d/%d)\n", chunkNum, len(chunk), wrote, totalSize)
+		n, err := dnw.port.Write(chunk)
+		if err != nil {
+			return wrote + n, fmt.Errorf("write error at offset %d: %v", wrote, err)
+		}
+		
+		// Wait for data to be transmitted
+		if err := dnw.port.Drain(); err != nil {
+			return wrote + n, fmt.Errorf("drain error at offset %d: %v", wrote, err)
+		}
+
+		wrote += n
+		
+		// Check for device response after each chunk
+		time.Sleep(time.Duration(20) * time.Millisecond)
+		
+		startPos, _ := dnw.reader.Seek(0, io.SeekCurrent)
+		endPos, _ := dnw.buffer.Seek(0, io.SeekCurrent)
+		available := endPos - startPos
+		
+		if available > 0 {
+			responseData := make([]byte, available)
+			rn, _ := dnw.reader.Read(responseData)
+			if rn > 0 {
+				fmt.Printf("dnw: !!! device sent %d bytes after chunk #%d: %q\n", rn, chunkNum, responseData[:rn])
+				
+				// Check if device sent NAK - if so, abort immediately
+				if bytes.Contains(responseData[:rn], []byte("nak")) || bytes.Contains(responseData[:rn], []byte("NAK")) {
+					return wrote, fmt.Errorf("device NAK'd after %d bytes - aborting transfer", wrote)
+				}
+			}
+		}
+		
+		// Delay between chunks
+		if wrote < totalSize {
+			time.Sleep(time.Duration(30) * time.Millisecond)
+		}
+	}
+
+	fmt.Printf("dnw: successfully wrote all %d chunks (%d total bytes)\n", chunkNum, wrote)
+	return wrote, nil
 }
 
 func (dnw *DNW) Close() error {

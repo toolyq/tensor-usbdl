@@ -351,7 +351,7 @@ func main() {
 				break
 			}
 			if msg == nil {
-				log.Traceln(" ------ msg == nil .......")
+				// log.Traceln(" ------ msg == nil .......")
 				continue
 			}
 			log.Traceln(" ------ msg :", msg, "!!!")
